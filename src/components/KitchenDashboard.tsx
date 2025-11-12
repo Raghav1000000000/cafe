@@ -6,13 +6,23 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MenuManagement } from "./MenuManagement";
 import { DailyReport } from "./DailyReport";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 // API base
 const API = (import.meta.env && import.meta.env.VITE_API_URL) || "http://localhost:4001";
 
 const fetchLiveOrders = async () => {
   try {
-    const res = await fetch(`${API}/orders`);
+    const res = await fetch(`${API}/orders`, { cache: 'no-store' as any });
     if (!res.ok) return [];
     return await res.json();
   } catch (e) {
@@ -66,6 +76,9 @@ type Order = {
 export const KitchenDashboard = () => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [reportTick, setReportTick] = useState(0);
+  const [billOrder, setBillOrder] = useState<Order | null>(null);
+  const [billOpen, setBillOpen] = useState(false);
+  const [billSubmitting, setBillSubmitting] = useState(false);
 
   useEffect(() => {
     // Initial fetch
@@ -133,18 +146,24 @@ export const KitchenDashboard = () => {
       case "READY":
         return (
           <Button
-            onClick={() => handleStatusChange(order.id, "COMPLETED")}
+            onClick={() => {
+              setBillOrder(order);
+              setBillOpen(true);
+            }}
             variant="outline"
             className="w-full"
             size="lg"
           >
-            Complete & Serve
+            Generate Bill
           </Button>
         );
       case "BILL_REQUESTED":
         return (
           <Button
-            onClick={() => handleStatusChange(order.id, "COMPLETED")}
+            onClick={() => {
+              setBillOrder(order);
+              setBillOpen(true);
+            }}
             className="w-full bg-warning hover:bg-warning/90 text-warning-foreground"
             size="lg"
           >
@@ -366,6 +385,83 @@ export const KitchenDashboard = () => {
           </TabsContent>
         </Tabs>
       </div>
+
+      {/* Bill confirmation dialog */}
+      <AlertDialog open={billOpen} onOpenChange={setBillOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Confirm Bill</AlertDialogTitle>
+            <AlertDialogDescription>
+              {billOrder ? (
+                <div className="space-y-3 mt-2">
+                  <div className="flex justify-between text-sm text-muted-foreground">
+                    <span>Table</span>
+                    <span className="font-medium">{billOrder.tableNumber}</span>
+                  </div>
+                  <div className="flex justify-between text-sm text-muted-foreground">
+                    <span>Customer</span>
+                    <span className="font-medium">{billOrder.customerName}</span>
+                  </div>
+                  <div className="border-t pt-3">
+                    <div className="space-y-1">
+                      {billOrder.items.map((it: any, idx: number) => (
+                        <div key={idx} className="flex justify-between text-sm">
+                          <span>{it.quantity}x {it.name}</span>
+                          {/* price may not be available in type; rely on totalAmount for subtotal */}
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-3 space-y-1">
+                      {(() => {
+                        const subtotal = billOrder.totalAmount || 0;
+                        const tax = Math.round(subtotal * 0.05);
+                        const service = Math.round(subtotal * 0.02);
+                        const total = subtotal + tax + service;
+                        return (
+                          <div className="space-y-1">
+                            <div className="flex justify-between text-sm"><span>Subtotal</span><span>₹{subtotal}</span></div>
+                            <div className="flex justify-between text-sm"><span>Tax (5%)</span><span>₹{tax}</span></div>
+                            <div className="flex justify-between text-sm"><span>Service (2%)</span><span>₹{service}</span></div>
+                            <div className="flex justify-between font-semibold text-base mt-1"><span>Total</span><span>₹{total}</span></div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <span>Preparing bill...</span>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={billSubmitting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={async () => {
+                if (!billOrder) return;
+                try {
+                  setBillSubmitting(true);
+                  const r = await generateBillForOrder(billOrder);
+                  if (r.success) {
+                    setBillOpen(false);
+                    setBillOrder(null);
+                    await loadOrders();
+                    setReportTick((t) => t + 1);
+                    alert("Bill generated and order completed");
+                  } else {
+                    alert("Failed to generate bill");
+                  }
+                } finally {
+                  setBillSubmitting(false);
+                }
+              }}
+              disabled={billSubmitting}
+            >
+              {billSubmitting ? "Generating..." : "Generate Bill"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

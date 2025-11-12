@@ -57,6 +57,67 @@ try {
   console.warn("MongoDB init error, falling back to in-memory:", e && e.message ? e.message : e);
 }
 
+// Optional Twilio WhatsApp integration (enabled when TWILIO_ACCOUNT_SID + TWILIO_AUTH_TOKEN + TWILIO_WHATSAPP_FROM are set)
+let twilioClient = null;
+let twilioFrom = null;
+try {
+  const sid = process.env.TWILIO_ACCOUNT_SID || "";
+  const token = process.env.TWILIO_AUTH_TOKEN || "";
+  const from = process.env.TWILIO_WHATSAPP_FROM || "";
+  if (sid && token && from) {
+    try {
+      const twilio = require("twilio");
+      twilioClient = twilio(sid, token);
+      twilioFrom = from;
+      console.log("Twilio client initialized for WhatsApp");
+    } catch (e) {
+      console.warn("Failed to initialize Twilio client (missing package?). WhatsApp integration disabled.", e && e.message ? e.message : e);
+    }
+  }
+} catch (e) {
+  // ignore
+}
+
+async function sendWhatsAppMessage(phone, message) {
+  if (!twilioClient || !twilioFrom) {
+    return { success: false, message: "Twilio not configured" };
+  }
+  try {
+    // Twilio expects E.164 numbers; ensure 'whatsapp:' prefix
+    const to = phone.startsWith("whatsapp:") ? phone : `whatsapp:${phone}`;
+    const from = twilioFrom.startsWith("whatsapp:") ? twilioFrom : `whatsapp:${twilioFrom}`;
+    const res = await twilioClient.messages.create({ from, to, body: message });
+    return { success: true, sid: res.sid };
+  } catch (e) {
+    return { success: false, error: e && e.message ? e.message : String(e) };
+  }
+}
+
+// ---------------- Phone normalization & validation ----------------
+function normalizePhone(raw) {
+  if (!raw) return null;
+  let v = String(raw).trim();
+  // Strip leading protocol if present (e.g., whatsapp:+123...) for storage key
+  if (v.startsWith('whatsapp:')) v = v.substring('whatsapp:'.length);
+  // Remove spaces, dashes, parentheses
+  v = v.replace(/[^0-9+]/g, '');
+  // If no leading +, prepend default country code
+  if (!v.startsWith('+')) {
+    const cc = process.env.DEFAULT_COUNTRY_CODE || '+1';
+    // Remove leading zeros before applying country code
+    v = cc + v.replace(/^0+/, '');
+  }
+  return v;
+}
+
+function isValidPhone(raw) {
+  const n = normalizePhone(raw);
+  if (!n) return false;
+  // Simple length check (after removing +)
+  const digits = n.replace(/[^0-9]/g, '');
+  return digits.length >= 8; // basic sanity threshold
+}
+
 // GET /menu - return available menu
 app.get("/menu", async (req, res) => {
   // If using Mongo, read menu items from DB and group by category
@@ -142,18 +203,45 @@ app.delete("/menu/:id", async (req, res) => {
   res.json({ success: true, item: removed });
 });
 
-// GET /orders - list orders
-  app.get("/orders", async (req, res) => {
-    if (useMongo && mongoDb) {
-      try {
-        const docs = await mongoDb.collection("orders").find({}).toArray();
-        const mapped = (docs || []).map((d) => ({ id: d._id || d.id, tableNumber: d.tableNumber, customerName: d.customerName, items: d.items, totalAmount: d.totalAmount, status: d.status, createdAt: d.createdAt || d.timestamp || Date.now() }));
-        return res.json(mapped);
-      } catch (e) {
-        console.warn("Failed to load orders from MongoDB, falling back to in-memory", e);
-      }
+// GET /orders - list orders (supports query filtering)
+// Query params:
+//   status=COMPLETED | PENDING | PREPARING | READY | BILL_REQUESTED
+//   excludeCompleted=true (if true, filters out COMPLETED orders)
+//   since=<timestamp ms> (only orders created at or after this time)
+app.get("/orders", async (req, res) => {
+  const { status, excludeCompleted, since } = req.query;
+  const sinceTs = since ? parseInt(String(since), 10) : null;
+  let list = [];
+  if (useMongo && mongoDb) {
+    try {
+      const mongoFilter = {};
+      if (status) mongoFilter.status = status;
+      if (excludeCompleted === 'true' && !status) mongoFilter.status = { $ne: 'COMPLETED' };
+      if (sinceTs) mongoFilter.createdAt = { $gte: sinceTs };
+      const docs = await mongoDb.collection("orders").find(mongoFilter).toArray();
+      list = (docs || []).map((d) => ({
+        id: d._id || d.id,
+        tableNumber: d.tableNumber,
+        customerName: d.customerName,
+        items: d.items,
+        totalAmount: d.totalAmount,
+        status: d.status,
+        // unify field name expected by frontend (KitchenDashboard uses 'timestamp')
+        timestamp: d.createdAt || d.timestamp || Date.now(),
+        createdAt: d.createdAt || d.timestamp || Date.now(),
+        updatedAt: d.updatedAt || null,
+      }));
+    } catch (e) {
+      console.warn("Failed to load orders from MongoDB, falling back to in-memory", e);
     }
-    res.json(orders);
+  }
+  if (!useMongo || !mongoDb || list.length === 0) {
+    list = orders.map(o => ({ ...o, timestamp: o.createdAt || o.timestamp || o.createdAt, createdAt: o.createdAt || o.timestamp, updatedAt: o.updatedAt || null }));
+  }
+  if (status) list = list.filter(l => l.status === status);
+  if (excludeCompleted === 'true') list = list.filter(l => l.status !== 'COMPLETED');
+  if (sinceTs) list = list.filter(l => l.timestamp >= sinceTs);
+  return res.json(list);
 });
 
 // Diagnostic endpoint removed — use MongoDB health checks instead if needed
@@ -205,16 +293,55 @@ app.post("/orders", async (req, res) => {
 // PATCH /orders/:id - update status or other fields
 app.patch("/orders/:id", async (req, res) => {
   const { status } = req.body;
-  const idx = orders.findIndex((o) => o.id === req.params.id);
-  if (idx === -1) return res.status(404).json({ success: false, message: "Order not found" });
+  const id = req.params.id;
+  const now = Date.now();
+  let updated = null;
 
-  if (status) orders[idx].status = status;
-  // persist update
-  if (useMongo && mongoDb) {
-    try { await mongoDb.collection("orders").updateOne({ _id: orders[idx].id }, { $set: { ...orders[idx], _id: orders[idx].id } }, { upsert: true }); } catch (e) { console.warn("Failed to persist order update to MongoDB:", e && e.message ? e.message : e); }
+  // Update in-memory if present
+  const idx = orders.findIndex((o) => o.id === id);
+  if (idx !== -1) {
+    if (status) {
+      orders[idx].status = status;
+      orders[idx].updatedAt = now;
+    }
+    updated = orders[idx];
   }
 
-  res.json({ success: true, order: orders[idx] });
+  // Always persist to Mongo when enabled (even if not in memory)
+  if (useMongo && mongoDb) {
+    try {
+      const setDoc = { updatedAt: now };
+      if (status) setDoc.status = status;
+      const r = await mongoDb.collection("orders").findOneAndUpdate(
+        { _id: id },
+        { $set: setDoc },
+        { upsert: false, returnDocument: 'after' }
+      );
+      if (r && r.value) {
+        const d = r.value;
+        updated = {
+          id: d._id || d.id,
+          tableNumber: d.tableNumber,
+          customerName: d.customerName,
+          items: d.items,
+          totalAmount: d.totalAmount,
+          status: d.status,
+          timestamp: d.createdAt || d.timestamp || now,
+          createdAt: d.createdAt || d.timestamp || now,
+          updatedAt: d.updatedAt || now,
+        };
+        // reflect to in-memory cache if present
+        if (idx !== -1) orders[idx] = { ...orders[idx], ...updated };
+      }
+    } catch (e) {
+      console.warn("Failed to persist order update to MongoDB:", e && e.message ? e.message : e);
+    }
+  }
+
+  if (!updated) {
+    return res.status(404).json({ success: false, message: "Order not found" });
+  }
+  return res.json({ success: true, order: updated });
 });
 
 // Simple OTP endpoints for local testing (insecure — for dev only)
@@ -223,11 +350,33 @@ const otps = {}; // phone -> code
 app.post("/otp", (req, res) => {
   const { phone } = req.body;
   if (!phone) return res.status(400).json({ success: false, message: "Phone required" });
+  if (!isValidPhone(phone)) return res.status(400).json({ success: false, message: "Invalid phone format" });
+  const normPhone = normalizePhone(phone);
   const code = Math.floor(1000 + Math.random() * 9000).toString();
-  otps[phone] = { code, createdAt: Date.now() };
-  console.log(`Generated OTP for ${phone}: ${code}`);
-  // In production you'd send via SMS; for local/dev we return it so QA can test
-  res.json({ success: true, code });
+  otps[normPhone] = { code, createdAt: Date.now() };
+  console.log(`Generated OTP for ${normPhone}: ${code}`);
+  // Optionally send OTP via WhatsApp if Twilio is configured
+  (async () => {
+    if (twilioClient) {
+      try {
+        const body = `Your verification code is: ${code}`;
+  const sent = await sendWhatsAppMessage(normPhone, body);
+        if (sent && sent.success) {
+          console.log(`Sent OTP to ${phone} via WhatsApp: ${sent.sid}`);
+        } else {
+          console.warn(`Failed to send OTP via WhatsApp for ${phone}:`, sent && sent.error ? sent.error : sent);
+        }
+      } catch (e) {
+        console.warn("WhatsApp send failed:", e && e.message ? e.message : e);
+      }
+    }
+  })();
+
+  // In development return the code for easier testing, but in production do not expose the code in the response
+  if (process.env.NODE_ENV !== 'production' || process.env.DEBUG_OTPS === 'true') {
+    return res.json({ success: true, code, phone: normPhone });
+  }
+  return res.json({ success: true, phone: normPhone });
 });
 
 // Debug endpoint to list recently generated OTPs (development only)
@@ -244,18 +393,38 @@ if (process.env.NODE_ENV !== 'production') {
 app.post("/otp/verify", (req, res) => {
   const { phone, code } = req.body;
   if (!phone || !code) return res.status(400).json({ success: false, message: "Phone and code required" });
-  const record = otps[phone];
+  if (!isValidPhone(phone)) return res.status(400).json({ success: false, message: "Invalid phone format" });
+  const normPhone = normalizePhone(phone);
+  const record = otps[normPhone];
   if (!record) return res.status(400).json({ success: false, message: "No OTP requested" });
   if (record.code !== String(code)) return res.status(400).json({ success: false, message: "Invalid code" });
-  delete otps[phone];
-  res.json({ success: true });
+  delete otps[normPhone];
+  // Persist a minimal customer record when MongoDB is enabled so bills/reports can reference customers
+  (async () => {
+    try {
+      if (useMongo && mongoDb) {
+        const cust = { phone: normPhone, verifiedAt: Date.now() };
+        await mongoDb.collection('customers').updateOne({ phone: normPhone }, { $set: { ...cust } }, { upsert: true });
+      }
+    } catch (e) {
+      console.warn('Failed to persist customer on OTP verify:', e && e.message ? e.message : e);
+    }
+  })();
+
+  res.json({ success: true, phone: normPhone });
 });
 
 // POST /bills - generate a bill (returns computed bill)
 app.post("/bills", async (req, res) => {
-  const { tableNumber, customerName, items } = req.body;
+  const { tableNumber, customerName, customerPhone, items } = req.body;
   if (!items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ success: false, message: "No items to bill" });
+  }
+
+  let normalizedCustomerPhone = null;
+  if (customerPhone) {
+    if (!isValidPhone(customerPhone)) return res.status(400).json({ success: false, message: 'invalid phone format' });
+    normalizedCustomerPhone = normalizePhone(customerPhone);
   }
 
   const subtotal = items.reduce((s, it) => s + (it.price || 0) * (it.quantity || 1), 0);
@@ -269,6 +438,7 @@ app.post("/bills", async (req, res) => {
     id: `BILL-${Date.now()}`,
     tableNumber: tableNumber || null,
     customerName: customerName || "Guest",
+    customerPhone: normalizedCustomerPhone || null,
     items,
     subtotal,
     tax,
@@ -282,6 +452,68 @@ app.post("/bills", async (req, res) => {
     try { await mongoDb.collection("bills").updateOne({ _id: bill.id }, { $set: { ...bill, _id: bill.id } }, { upsert: true }); } catch (e) { console.warn("Failed to persist bill to MongoDB:", e && e.message ? e.message : e); }
   }
   res.json({ success: true, bill });
+});
+
+// Get bills for a specific customer phone
+app.get('/bills/by-customer/:phone', async (req, res) => {
+  const rawPhone = req.params.phone;
+  if (!isValidPhone(rawPhone)) return res.status(400).json({ success: false, message: 'invalid phone format' });
+  const norm = normalizePhone(rawPhone);
+  if (useMongo && mongoDb) {
+    try {
+      const docs = await mongoDb.collection('bills').find({ customerPhone: norm }).sort({ createdAt: -1 }).toArray();
+      return res.json(docs.map(d => ({ id: d._id || d.id, ...d })));
+    } catch (e) {
+      console.warn('Failed to query bills by customer:', e && e.message ? e.message : e);
+      return res.status(500).json({ success: false, message: String(e) });
+    }
+  }
+  // in-memory fallback
+  const filtered = bills.filter(b => b.customerPhone === norm);
+  return res.json(filtered);
+});
+
+// Customer endpoints
+app.post('/customers', async (req, res) => {
+  const { phone, name, tableNumber } = req.body;
+  if (!phone) return res.status(400).json({ success: false, message: 'phone required' });
+  if (!isValidPhone(phone)) return res.status(400).json({ success: false, message: 'invalid phone format' });
+  const normPhone = normalizePhone(phone);
+  const record = { phone: normPhone, name: name || null, tableNumber: tableNumber || null, updatedAt: Date.now() };
+  if (useMongo && mongoDb) {
+    try {
+      await mongoDb.collection('customers').updateOne({ phone: normPhone }, { $set: record, $setOnInsert: { createdAt: Date.now() } }, { upsert: true });
+      return res.json({ success: true, customer: record });
+    } catch (e) {
+      console.warn('Failed to persist customer:', e && e.message ? e.message : e);
+      return res.status(500).json({ success: false, message: String(e) });
+    }
+  }
+  return res.json({ success: true, customer: record, message: 'Mongo not configured; in-memory only' });
+});
+
+app.get('/customers', async (req, res) => {
+  if (useMongo && mongoDb) {
+    try {
+      const docs = await mongoDb.collection('customers').find({}).toArray();
+      return res.json(docs.map(d => ({ phone: d.phone, name: d.name, tableNumber: d.tableNumber, createdAt: d.createdAt, updatedAt: d.updatedAt || d.verifiedAt })));
+    } catch (e) {
+      console.warn('Failed to load customers from MongoDB:', e && e.message ? e.message : e);
+    }
+  }
+  return res.json([]);
+});
+
+// WhatsApp send endpoint (uses Twilio if configured)
+app.post('/whatsapp/send', async (req, res) => {
+  const { phone, message } = req.body;
+  if (!phone || !message) return res.status(400).json({ success: false, message: 'phone and message required' });
+  if (!isValidPhone(phone)) return res.status(400).json({ success: false, message: 'invalid phone format' });
+  const normPhone = normalizePhone(phone);
+  if (!twilioClient) return res.status(400).json({ success: false, message: 'WhatsApp/Twilio not configured' });
+  const sent = await sendWhatsAppMessage(normPhone, message);
+  if (sent && sent.success) return res.json({ success: true, sid: sent.sid });
+  return res.status(500).json({ success: false, error: sent && sent.error ? sent.error : 'unknown' });
 });
 
 // GET /bills/:id

@@ -1,0 +1,24 @@
+{
+  "name": "snappy-serve-backend",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "dotenv": "^16.3.1",
+    "mongodb": "^5.7.0",
+    "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "nodemon": "^2.0.22"
+  },
+  "description": "This folder contains a tiny Express.js backend used for local development. It provides simple endpoints for menu, orders, and bills stored in-memory.",
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

@@ -9,6 +9,42 @@ const fs = require("fs");
 const whatsappService = require("./whatsappService");
 const smsService = require("./smsService");
 
+/**
+ * Validate Indian phone number format
+ * @param {string} phone - Phone number to validate
+ * @returns {boolean} - True if valid Indian number
+ */
+function validateIndianPhoneNumber(phone) {
+  // Check if phone number is provided
+  if (!phone || typeof phone !== 'string') {
+    return false;
+  }
+
+  // Remove any whitespace
+  const cleanPhone = phone.trim();
+
+  // Check format: +91XXXXXXXXXX (13 characters total)
+  if (!cleanPhone.startsWith('+91') || cleanPhone.length !== 13) {
+    return false;
+  }
+
+  // Extract the 10 digits after +91
+  const digits = cleanPhone.substring(3);
+
+  // Check if all characters are digits
+  if (!/^\d{10}$/.test(digits)) {
+    return false;
+  }
+
+  // Check if first digit is 6-9 (valid Indian mobile prefixes)
+  const firstDigit = parseInt(digits.charAt(0));
+  if (firstDigit < 6 || firstDigit > 9) {
+    return false;
+  }
+
+  return true;
+}
+
 // Load .env from server/.env when present (local dev convenience)
 try {
   const dotenv = require("dotenv");
@@ -226,7 +262,19 @@ const otps = {}; // phone -> code
 
 app.post("/otp", async (req, res) => {
   const { phone } = req.body;
-  if (!phone) return res.status(400).json({ success: false, message: "Phone required" });
+  
+  // Validate phone number
+  if (!phone) {
+    return res.status(400).json({ success: false, message: "Phone number is required" });
+  }
+  
+  if (!validateIndianPhoneNumber(phone)) {
+    return res.status(400).json({ 
+      success: false, 
+      message: "Invalid phone number format. Please use Indian mobile number in format: +91XXXXXXXXXX (10 digits after +91, starting with 6-9)" 
+    });
+  }
+  
   const code = Math.floor(1000 + Math.random() * 9000).toString();
   otps[phone] = { code, createdAt: Date.now() };
   console.log(`Generated OTP for ${phone}: ${code}`);
@@ -307,6 +355,14 @@ app.post("/bills", async (req, res) => {
   const { tableNumber, customerName, items, phone } = req.body;
   if (!items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ success: false, message: "No items to bill" });
+  }
+
+  // Validate phone number if provided
+  if (phone && !validateIndianPhoneNumber(phone)) {
+    return res.status(400).json({ 
+      success: false, 
+      message: "Invalid phone number format. Please use Indian mobile number in format: +91XXXXXXXXXX (10 digits after +91, starting with 6-9)" 
+    });
   }
 
   const subtotal = items.reduce((s, it) => s + (it.price || 0) * (it.quantity || 1), 0);

@@ -114,6 +114,7 @@ async function sendSmsMessage(phone, message) {
 
     const result = await response.json();
 
+    
     if (response.ok) {
       smsSettings.used++;
       console.log(`SMS sent to ${phone} via ${smsSettings.provider}, credits used: ${smsSettings.used}/${smsSettings.credits}`);

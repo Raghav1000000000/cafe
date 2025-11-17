@@ -35,6 +35,53 @@ export const CustomerApp = () => {
   const [tableNumber, setTableNumber] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [phone, setPhone] = useState("");
+  const [phoneError, setPhoneError] = useState("");
+
+  // Phone validation function
+  const validatePhoneNumber = (phoneNumber: string) => {
+    if (!phoneNumber.trim()) {
+      return "Phone number is required";
+    }
+
+    // Check format: +91XXXXXXXXXX (13 characters total)
+    if (!phoneNumber.startsWith('+91') || phoneNumber.length !== 13) {
+      return "Phone number must be in format: +91XXXXXXXXXX";
+    }
+
+    // Extract the 10 digits after +91
+    const digits = phoneNumber.substring(3);
+
+    // Check if all characters are digits
+    if (!/^\d{10}$/.test(digits)) {
+      return "Phone number must contain only digits after +91";
+    }
+
+    // Check if first digit is 6-9 (valid Indian mobile prefixes)
+    const firstDigit = parseInt(digits.charAt(0));
+    if (firstDigit < 6 || firstDigit > 9) {
+      return "Indian mobile numbers must start with 6, 7, 8, or 9";
+    }
+
+    return "";
+  };
+
+  // Handle phone input change with validation
+  const handlePhoneChange = (value: string) => {
+    setPhone(value);
+    const error = validatePhoneNumber(value);
+    setPhoneError(error);
+  };
+
+  // Auto-format phone number on blur
+  const handlePhoneBlur = () => {
+    if (phone && !phone.startsWith('+91') && phone.length === 10 && /^\d{10}$/.test(phone)) {
+      // If user entered 10 digits without +91, add +91 prefix
+      const formatted = `+91${phone}`;
+      setPhone(formatted);
+      const error = validatePhoneNumber(formatted);
+      setPhoneError(error);
+    }
+  };
   const [cart, setCart] = useState<CartItem[]>([]);
   const [orderId, setOrderId] = useState("");
   type MenuMap = Record<string, { id: string; name: string; price: number; available?: boolean }[]>;
@@ -73,6 +120,14 @@ export const CustomerApp = () => {
       toast.error("Please enter table number, name and phone");
       return;
     }
+    
+    // Validate phone number
+    const phoneValidationError = validatePhoneNumber(phone);
+    if (phoneValidationError) {
+      toast.error(phoneValidationError);
+      return;
+    }
+    
     if (parseInt(tableNumber) < 1 || parseInt(tableNumber) > 40) {
       toast.error("Table number must be between 1 and 40");
       return;
@@ -477,10 +532,18 @@ export const CustomerApp = () => {
               <label className="text-sm font-medium mb-2 block">Phone (for OTP)</label>
               <Input
                 type="tel"
-                placeholder="Enter your phone number"
+                placeholder="+91XXXXXXXXXX"
                 value={phone}
-                onChange={(e) => setPhone(e.target.value)}
+                onChange={(e) => handlePhoneChange(e.target.value)}
+                onBlur={handlePhoneBlur}
+                className={phoneError ? "border-red-500" : ""}
               />
+              {phoneError && (
+                <p className="text-sm text-red-500 mt-1">{phoneError}</p>
+              )}
+              <p className="text-xs text-muted-foreground mt-1">
+                Enter Indian mobile number in format: +91XXXXXXXXXX (10 digits, starting with 6-9)
+              </p>
             </div>
             <Button onClick={handleStartOrder} className="w-full" size="lg">
               View Menu

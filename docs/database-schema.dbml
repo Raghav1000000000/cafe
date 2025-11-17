@@ -1,0 +1,176 @@
+// Database Schema for Cafe Management System
+// Use this code at: https://dbdiagram.io/
+
+Table menu_items {
+  id varchar(50) [pk, note: 'Unique identifier (e.g., tea-1, snack-1)']
+  name varchar(100) [not null, note: 'Item name (e.g., Masala Chai, Samosa)']
+  category varchar(50) [not null, note: 'Category: Tea, Snacks, Paratha, etc.']
+  price decimal(10,2) [not null, note: 'Price in rupees']
+  available boolean [default: true, note: 'Item availability status']
+  created_at timestamp [default: `now()`, note: 'Record creation timestamp']
+  updated_at timestamp [default: `now()`, note: 'Last update timestamp']
+  
+  indexes {
+    category
+    (category, available)
+  }
+  
+  note: 'Menu items catalog with categories and pricing'
+}
+
+Table orders {
+  id varchar(50) [pk, note: 'Unique order ID (e.g., ORD-1234567890)']
+  table_number int [note: 'Table number for dine-in orders']
+  customer_name varchar(100) [default: 'Guest', note: 'Customer name']
+  total_amount decimal(10,2) [not null, note: 'Total order amount']
+  status varchar(20) [not null, default: 'PENDING', note: 'Order status: PENDING, PREPARING, READY, SERVED, COMPLETED, CANCELLED']
+  created_at timestamp [default: `now()`, note: 'Order creation time']
+  updated_at timestamp [default: `now()`, note: 'Last status update time']
+  
+  indexes {
+    status
+    created_at
+    (status, created_at)
+    table_number
+  }
+  
+  note: 'Customer orders tracking'
+}
+
+Table order_items {
+  id int [pk, increment, note: 'Auto-increment primary key']
+  order_id varchar(50) [not null, ref: > orders.id, note: 'Reference to parent order']
+  menu_item_id varchar(50) [not null, ref: > menu_items.id, note: 'Reference to menu item']
+  item_name varchar(100) [not null, note: 'Snapshot of item name at order time']
+  price decimal(10,2) [not null, note: 'Snapshot of price at order time']
+  quantity int [not null, default: 1, note: 'Quantity ordered']
+  subtotal decimal(10,2) [not null, note: 'price * quantity']
+  
+  indexes {
+    order_id
+    menu_item_id
+  }
+  
+  note: 'Individual items within orders with quantity'
+}
+
+Table bills {
+  id varchar(50) [pk, note: 'Unique bill ID (e.g., BILL-1234567890)']
+  order_id varchar(50) [ref: > orders.id, note: 'Optional reference to source order']
+  table_number int [note: 'Table number for dine-in']
+  customer_name varchar(100) [default: 'Guest', note: 'Customer name']
+  subtotal decimal(10,2) [not null, note: 'Sum of all items']
+  tax decimal(10,2) [not null, note: 'Tax amount (5%)']
+  service_charge decimal(10,2) [not null, note: 'Service charge (2%)']
+  total decimal(10,2) [not null, note: 'Final amount = subtotal + tax + service']
+  created_at timestamp [default: `now()`, note: 'Bill generation time']
+  
+  indexes {
+    created_at
+    order_id
+  }
+  
+  note: 'Generated bills with tax and service charges'
+}
+
+Table bill_items {
+  id int [pk, increment, note: 'Auto-increment primary key']
+  bill_id varchar(50) [not null, ref: > bills.id, note: 'Reference to parent bill']
+  item_name varchar(100) [not null, note: 'Item name']
+  price decimal(10,2) [not null, note: 'Item price']
+  quantity int [not null, default: 1, note: 'Quantity']
+  subtotal decimal(10,2) [not null, note: 'price * quantity']
+  
+  indexes {
+    bill_id
+  }
+  
+  note: 'Items included in bills'
+}
+
+Table otp_verification {
+  phone varchar(20) [pk, note: 'Phone number (primary key)']
+  code varchar(4) [not null, note: '4-digit OTP code']
+  created_at timestamp [default: `now()`, note: 'OTP generation time']
+  expires_at timestamp [not null, note: 'OTP expiration time']
+  verified boolean [default: false, note: 'Verification status']
+  
+  indexes {
+    expires_at
+  }
+  
+  note: 'OTP codes for authentication (development only)'
+}
+
+Table daily_reports {
+  id int [pk, increment, note: 'Auto-increment primary key']
+  report_date date [not null, unique, note: 'Date for the report']
+  total_orders int [not null, default: 0, note: 'Total number of orders']
+  total_revenue decimal(10,2) [not null, default: 0, note: 'Total revenue for the day']
+  average_order_value decimal(10,2) [not null, default: 0, note: 'Average order value']
+  total_customers int [not null, default: 0, note: 'Unique customer count']
+  created_at timestamp [default: `now()`, note: 'Report generation time']
+  
+  indexes {
+    report_date
+  }
+  
+  note: 'Pre-computed daily sales reports'
+}
+
+Table report_top_items {
+  id int [pk, increment, note: 'Auto-increment primary key']
+  report_id int [not null, ref: > daily_reports.id, note: 'Reference to daily report']
+  item_name varchar(100) [not null, note: 'Item name']
+  quantity_sold int [not null, note: 'Total quantity sold']
+  revenue decimal(10,2) [not null, note: 'Revenue from this item']
+  rank int [not null, note: 'Ranking by quantity sold']
+  
+  indexes {
+    report_id
+    rank
+  }
+  
+  note: 'Top selling items per day'
+}
+
+Table report_hourly_breakdown {
+  id int [pk, increment, note: 'Auto-increment primary key']
+  report_id int [not null, ref: > daily_reports.id, note: 'Reference to daily report']
+  hour varchar(5) [not null, note: 'Hour in format HH:00']
+  orders_count int [not null, default: 0, note: 'Number of orders in this hour']
+  revenue decimal(10,2) [not null, default: 0, note: 'Revenue in this hour']
+  
+  indexes {
+    report_id
+    hour
+  }
+  
+  note: 'Hourly breakdown of orders and revenue'
+}
+
+// Relationships are defined above using ref:
+// order_items.order_id > orders.id
+// order_items.menu_item_id > menu_items.id
+// bills.order_id > orders.id
+// bill_items.bill_id > bills.id
+// report_top_items.report_id > daily_reports.id
+// report_hourly_breakdown.report_id > daily_reports.id
+
+// Enums for reference
+Enum order_status {
+  PENDING [note: 'Order received, not started']
+  PREPARING [note: 'Kitchen is preparing']
+  READY [note: 'Order ready for serving']
+  SERVED [note: 'Order served to customer']
+  COMPLETED [note: 'Order completed and paid']
+  CANCELLED [note: 'Order cancelled']
+}
+
+Enum menu_category {
+  Tea [note: 'Tea items']
+  Snacks [note: 'Snack items']
+  Paratha [note: 'Paratha items']
+  Beverages [note: 'Other beverages']
+  Meals [note: 'Full meals']
+}

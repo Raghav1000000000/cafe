@@ -1,0 +1,321 @@
+@startuml Cafe Management System - Class Diagram
+
+' Color scheme
+skinparam class {
+    BackgroundColor LightYellow
+    BorderColor Black
+    ArrowColor Black
+}
+
+skinparam package {
+    BackgroundColor LightGray
+    BorderColor Black
+}
+
+package "Domain Models" {
+    class MenuItem {
+        - id: String
+        - name: String
+        - category: String
+        - price: Number
+        - available: Boolean
+        + getId(): String
+        + getName(): String
+        + getPrice(): Number
+        + setAvailable(available: Boolean): void
+        + toJSON(): Object
+    }
+
+    class Order {
+        - id: String
+        - tableNumber: Number
+        - customerName: String
+        - items: OrderItem[]
+        - totalAmount: Number
+        - status: OrderStatus
+        - createdAt: Number
+        + getId(): String
+        + addItem(item: OrderItem): void
+        + removeItem(itemId: String): void
+        + updateStatus(status: OrderStatus): void
+        + calculateTotal(): Number
+        + toJSON(): Object
+    }
+
+    class OrderItem {
+        - menuItemId: String
+        - name: String
+        - price: Number
+        - quantity: Number
+        + getSubtotal(): Number
+        + updateQuantity(quantity: Number): void
+    }
+
+    class Bill {
+        - id: String
+        - tableNumber: Number
+        - customerName: String
+        - items: OrderItem[]
+        - subtotal: Number
+        - tax: Number
+        - service: Number
+        - total: Number
+        - createdAt: Number
+        + calculateSubtotal(): Number
+        + calculateTax(rate: Number): Number
+        + calculateService(rate: Number): Number
+        + calculateTotal(): Number
+        + toJSON(): Object
+    }
+
+    enum OrderStatus {
+        PENDING
+        PREPARING
+        READY
+        SERVED
+        COMPLETED
+        CANCELLED
+    }
+
+    enum MenuCategory {
+        TEA
+        SNACKS
+        PARATHA
+        BEVERAGES
+        MEALS
+    }
+
+    class DailyReport {
+        - date: String
+        - totalOrders: Number
+        - totalRevenue: Number
+        - averageOrderValue: Number
+        - totalCustomers: Number
+        - topItems: TopItem[]
+        - hourlyBreakdown: HourlyData[]
+        + generateReport(date: String): DailyReport
+        + getTopItems(limit: Number): TopItem[]
+        + getHourlyBreakdown(): HourlyData[]
+    }
+
+    class TopItem {
+        - name: String
+        - quantity: Number
+        - revenue: Number
+    }
+
+    class HourlyData {
+        - hour: String
+        - orders: Number
+        - revenue: Number
+    }
+
+    class OTP {
+        - phone: String
+        - code: String
+        - createdAt: Number
+        + isValid(code: String): Boolean
+        + isExpired(ttl: Number): Boolean
+    }
+}
+
+package "Services" {
+    class MenuService {
+        - menuRepository: MenuRepository
+        + getAllMenuItems(): MenuItem[]
+        + getMenuByCategory(category: String): MenuItem[]
+        + addMenuItem(item: MenuItem): MenuItem
+        + updateMenuItem(id: String, data: Object): MenuItem
+        + deleteMenuItem(id: String): Boolean
+        + toggleAvailability(id: String): MenuItem
+    }
+
+    class OrderService {
+        - orderRepository: OrderRepository
+        + createOrder(orderData: Object): Order
+        + getOrderById(id: String): Order
+        + getAllOrders(): Order[]
+        + updateOrderStatus(id: String, status: OrderStatus): Order
+        + cancelOrder(id: String): Boolean
+    }
+
+    class BillingService {
+        - billRepository: BillRepository
+        - TAX_RATE: Number = 0.05
+        - SERVICE_RATE: Number = 0.02
+        + generateBill(orderData: Object): Bill
+        + getBillById(id: String): Bill
+        + calculateTax(amount: Number): Number
+        + calculateService(amount: Number): Number
+    }
+
+    class ReportService {
+        - billRepository: BillRepository
+        - orderRepository: OrderRepository
+        + generateDailyReport(date: String): DailyReport
+        + getTopSellingItems(date: String, limit: Number): TopItem[]
+        + getHourlyBreakdown(date: String): HourlyData[]
+        + getTotalRevenue(startDate: String, endDate: String): Number
+    }
+
+    class AuthService {
+        - otpStore: Map<String, OTP>
+        + generateOTP(phone: String): String
+        + verifyOTP(phone: String, code: String): Boolean
+        + cleanupExpiredOTPs(): void
+    }
+}
+
+package "Repositories" {
+    interface IRepository<T> {
+        + findAll(): T[]
+        + findById(id: String): T
+        + create(entity: T): T
+        + update(id: String, entity: T): T
+        + delete(id: String): Boolean
+    }
+
+    class MenuRepository {
+        - dataStore: Object
+        - mongoDb: Database
+        - useMongo: Boolean
+        + findAll(): MenuItem[]
+        + findById(id: String): MenuItem
+        + findByCategory(category: String): MenuItem[]
+        + create(item: MenuItem): MenuItem
+        + update(id: String, item: MenuItem): MenuItem
+        + delete(id: String): Boolean
+    }
+
+    class OrderRepository {
+        - orders: Order[]
+        - mongoDb: Database
+        - useMongo: Boolean
+        + findAll(): Order[]
+        + findById(id: String): Order
+        + create(order: Order): Order
+        + update(id: String, order: Order): Order
+        + delete(id: String): Boolean
+    }
+
+    class BillRepository {
+        - bills: Bill[]
+        - mongoDb: Database
+        - useMongo: Boolean
+        + findAll(): Bill[]
+        + findById(id: String): Bill
+        + findByDateRange(start: Date, end: Date): Bill[]
+        + create(bill: Bill): Bill
+    }
+}
+
+package "API Controllers" {
+    class MenuController {
+        - menuService: MenuService
+        + getMenu(req: Request, res: Response): void
+        + addMenuItem(req: Request, res: Response): void
+        + updateMenuItem(req: Request, res: Response): void
+        + deleteMenuItem(req: Request, res: Response): void
+    }
+
+    class OrderController {
+        - orderService: OrderService
+        + getOrders(req: Request, res: Response): void
+        + getOrderById(req: Request, res: Response): void
+        + createOrder(req: Request, res: Response): void
+        + updateOrderStatus(req: Request, res: Response): void
+    }
+
+    class BillController {
+        - billingService: BillingService
+        + generateBill(req: Request, res: Response): void
+        + getBillById(req: Request, res: Response): void
+    }
+
+    class ReportController {
+        - reportService: ReportService
+        + getDailyReport(req: Request, res: Response): void
+    }
+
+    class AuthController {
+        - authService: AuthService
+        + sendOTP(req: Request, res: Response): void
+        + verifyOTP(req: Request, res: Response): void
+    }
+}
+
+package "Database" {
+    class MongoDBClient {
+        - client: MongoClient
+        - db: Database
+        - uri: String
+        + connect(): Promise<void>
+        + disconnect(): Promise<void>
+        + getDatabase(): Database
+        + getCollection(name: String): Collection
+    }
+}
+
+' Relationships
+
+' Domain Model Relationships
+Order "1" *-- "many" OrderItem : contains
+Bill "1" *-- "many" OrderItem : includes
+Order -- OrderStatus : has
+MenuItem -- MenuCategory : belongs to
+DailyReport "1" *-- "many" TopItem : contains
+DailyReport "1" *-- "many" HourlyData : contains
+
+' Service Dependencies
+MenuService --> MenuRepository : uses
+OrderService --> OrderRepository : uses
+BillingService --> BillRepository : uses
+ReportService --> BillRepository : uses
+ReportService --> OrderRepository : uses
+AuthService --> OTP : manages
+
+' Repository Dependencies
+MenuRepository ..|> IRepository : implements
+OrderRepository ..|> IRepository : implements
+BillRepository ..|> IRepository : implements
+
+MenuRepository --> MenuItem : manages
+OrderRepository --> Order : manages
+BillRepository --> Bill : manages
+
+MenuRepository --> MongoDBClient : uses
+OrderRepository --> MongoDBClient : uses
+BillRepository --> MongoDBClient : uses
+
+' Controller Dependencies
+MenuController --> MenuService : uses
+OrderController --> OrderService : uses
+BillController --> BillingService : uses
+ReportController --> ReportService : uses
+AuthController --> AuthService : uses
+
+' Data flow
+MenuController --> MenuItem : creates/updates
+OrderController --> Order : creates/updates
+BillController --> Bill : creates
+ReportController --> DailyReport : generates
+
+note right of MongoDBClient
+  Optional MongoDB integration
+  Falls back to in-memory storage
+  when USE_MONGO=false
+end note
+
+note right of AuthService
+  OTP generation for
+  local development only
+  (Not production-ready)
+end note
+
+note top of IRepository
+  Generic repository pattern
+  Supports both MongoDB and
+  in-memory storage
+end note
+
+@enduml

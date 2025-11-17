@@ -2,11 +2,12 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { CustomerApp } from "@/components/CustomerApp";
 import { KitchenDashboard } from "@/components/KitchenDashboard";
+import { AdminDashboard } from "@/components/AdminDashboard";
 import { Button } from "@/components/ui/button";
-import { ChefHat, ShoppingBag } from "lucide-react";
+import { ChefHat, ShoppingBag, BarChart3, Shield } from "lucide-react";
 
 const Index = () => {
-  const [activeView, setActiveView] = useState<"select" | "customer" | "kitchen">("select");
+  const [activeView, setActiveView] = useState<"select" | "customer" | "kitchen" | "admin">("select");
 
   if (activeView === "customer") {
     return (
@@ -21,7 +22,7 @@ const Index = () => {
     );
   }
 
-  if (activeView === "kitchen") {
+  if (activeView === "admin") {
     return (
       <div>
         <div className="fixed top-4 right-4 z-50">
@@ -29,7 +30,7 @@ const Index = () => {
             Switch View
           </Button>
         </div>
-        <KitchenDashboard />
+        <AdminDashboard />
       </div>
     );
   }
@@ -43,7 +44,7 @@ const Index = () => {
             Choose your interface to get started
           </p>
         </div>
-        <div className="grid gap-6">
+        <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
           <button
             onClick={() => setActiveView("customer")}
             className="group relative overflow-hidden rounded-2xl border-2 border-border bg-card p-6 transition-all hover:border-primary hover:shadow-lg w-full"
@@ -61,6 +62,7 @@ const Index = () => {
           <div className="text-center">
             <Link to="/customer" target="_blank" className="text-sm text-primary underline">Open Customer in new tab</Link>
           </div>
+
           <button
             onClick={() => setActiveView("kitchen")}
             className="group relative overflow-hidden rounded-2xl border-2 border-border bg-card p-6 transition-all hover:border-secondary hover:shadow-lg w-full"
@@ -77,6 +79,38 @@ const Index = () => {
           </button>
           <div className="text-center">
             <Link to="/kitchen" target="_blank" className="text-sm text-secondary underline">Open Kitchen in new tab</Link>
+          </div>
+
+          <Link to="/reports" className="group relative overflow-hidden rounded-2xl border-2 border-border bg-card p-6 transition-all hover:border-accent hover:shadow-lg w-full">
+            <div className="space-y-4">
+              <div className="w-20 h-20 rounded-full bg-accent/10 flex items-center justify-center mx-auto group-hover:bg-accent/20 transition-colors">
+                <BarChart3 className="w-10 h-10 text-accent" />
+              </div>
+              <h2 className="text-2xl font-bold">Daily Reports</h2>
+              <p className="text-muted-foreground">
+                View sales analytics and performance metrics
+              </p>
+            </div>
+          </Link>
+          <div className="text-center">
+            <Link to="/kitchen" target="_blank" className="text-sm text-secondary underline">Open Kitchen in new tab</Link>
+          </div>
+          <button
+            onClick={() => setActiveView("admin")}
+            className="group relative overflow-hidden rounded-2xl border-2 border-border bg-card p-6 transition-all hover:border-destructive hover:shadow-lg w-full"
+          >
+            <div className="space-y-4">
+              <div className="w-20 h-20 rounded-full bg-destructive/10 flex items-center justify-center mx-auto group-hover:bg-destructive/20 transition-colors">
+                <Shield className="w-10 h-10 text-destructive" />
+              </div>
+              <h2 className="text-2xl font-bold">Admin Dashboard</h2>
+              <p className="text-muted-foreground">
+                System management, analytics, and administration
+              </p>
+            </div>
+          </button>
+          <div className="text-center">
+            <Link to="/admin" target="_blank" className="text-sm text-destructive underline">Open Admin in new tab</Link>
           </div>
         </div>
       </div>

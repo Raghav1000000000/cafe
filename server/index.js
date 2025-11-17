@@ -5,6 +5,10 @@ const { menuData } = require("./data");
 const path = require("path");
 const fs = require("fs");
 
+// Import messaging services
+const whatsappService = require("./whatsappService");
+const smsService = require("./smsService");
+
 // Load .env from server/.env when present (local dev convenience)
 try {
   const dotenv = require("dotenv");
@@ -220,12 +224,21 @@ app.patch("/orders/:id", async (req, res) => {
 // Simple OTP endpoints for local testing (insecure — for dev only)
 const otps = {}; // phone -> code
 
-app.post("/otp", (req, res) => {
+app.post("/otp", async (req, res) => {
   const { phone } = req.body;
   if (!phone) return res.status(400).json({ success: false, message: "Phone required" });
   const code = Math.floor(1000 + Math.random() * 9000).toString();
   otps[phone] = { code, createdAt: Date.now() };
   console.log(`Generated OTP for ${phone}: ${code}`);
+  
+  // Send WhatsApp message if enabled
+  const whatsappResult = await whatsappService.sendOtpViaWhatsapp(phone, code);
+  if (whatsappResult.success) {
+    console.log(`OTP sent via WhatsApp to ${phone}`);
+  } else {
+    console.warn(`Failed to send OTP via WhatsApp to ${phone}:`, whatsappResult.message);
+  }
+  
   // In production you'd send via SMS; for local/dev we return it so QA can test
   res.json({ success: true, code });
 });
@@ -251,9 +264,47 @@ app.post("/otp/verify", (req, res) => {
   res.json({ success: true });
 });
 
+// WhatsApp endpoints
+app.get("/whatsapp/settings", (req, res) => {
+  res.json({ success: true, settings: whatsappService.getWhatsappSettings() });
+});
+
+app.post("/whatsapp/settings", (req, res) => {
+  const { enabled, apiKey, phoneNumber } = req.body;
+  whatsappService.updateWhatsappSettings({ enabled, apiKey, phoneNumber });
+  res.json({ success: true, settings: whatsappService.getWhatsappSettings() });
+});
+
+app.post("/whatsapp/test", async (req, res) => {
+  const { phone } = req.body;
+  if (!phone) return res.status(400).json({ success: false, message: "Phone required for test" });
+  
+  const result = await whatsappService.sendWhatsappMessage(phone, "This is a test message from Cafe Management System. If you received this, WhatsApp integration is working!");
+  res.json(result);
+});
+
+// SMS endpoints
+app.get("/sms/settings", (req, res) => {
+  res.json({ success: true, settings: smsService.getSmsSettings(), providers: smsService.getAvailableSmsProviders() });
+});
+
+app.post("/sms/settings", (req, res) => {
+  const { enabled, provider, apiKey, apiSecret, phoneNumber } = req.body;
+  smsService.updateSmsSettings({ enabled, provider, apiKey, apiSecret, phoneNumber });
+  res.json({ success: true, settings: smsService.getSmsSettings() });
+});
+
+app.post("/sms/test", async (req, res) => {
+  const { phone } = req.body;
+  if (!phone) return res.status(400).json({ success: false, message: "Phone required for test" });
+  
+  const result = await smsService.sendSmsMessage(phone, "This is a test SMS from Cafe Management System. If you received this, SMS integration is working!");
+  res.json(result);
+});
+
 // POST /bills - generate a bill (returns computed bill)
 app.post("/bills", async (req, res) => {
-  const { tableNumber, customerName, items } = req.body;
+  const { tableNumber, customerName, items, phone } = req.body;
   if (!items || !Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ success: false, message: "No items to bill" });
   }
@@ -269,6 +320,7 @@ app.post("/bills", async (req, res) => {
     id: `BILL-${Date.now()}`,
     tableNumber: tableNumber || null,
     customerName: customerName || "Guest",
+    phone: phone || null,
     items,
     subtotal,
     tax,
@@ -281,6 +333,15 @@ app.post("/bills", async (req, res) => {
   if (useMongo && mongoDb) {
     try { await mongoDb.collection("bills").updateOne({ _id: bill.id }, { $set: { ...bill, _id: bill.id } }, { upsert: true }); } catch (e) { console.warn("Failed to persist bill to MongoDB:", e && e.message ? e.message : e); }
   }
+
+  // Send WhatsApp bill notification if enabled and phone provided
+  const whatsappResult = await whatsappService.sendBillNotificationViaWhatsapp(phone, bill);
+  if (whatsappResult.success) {
+    console.log(`Bill notification sent via WhatsApp to ${phone} for bill ${bill.id}`);
+  } else {
+    console.warn(`Failed to send bill notification via WhatsApp to ${phone}:`, whatsappResult.message);
+  }
+
   res.json({ success: true, bill });
 });
 
@@ -334,6 +395,125 @@ app.get("/reports/daily", (req, res) => {
   res.json({ date, totalOrders, totalRevenue, averageOrderValue: totalOrders ? totalRevenue / totalOrders : 0, totalCustomers: customers.size, topItems, hourlyBreakdown: hourly });
 });
 
+// Weekly report computed from stored bills/orders
+app.get("/reports/weekly", (req, res) => {
+  const date = req.query.date || new Date().toISOString().split("T")[0];
+  const inputDate = new Date(date);
+  // Get start of week (Monday)
+  const dayOfWeek = inputDate.getDay(); // 0 = Sunday, 1 = Monday, etc.
+  const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek; // If Sunday, go back 6 days, else calculate diff to Monday
+  const weekStart = new Date(inputDate);
+  weekStart.setDate(inputDate.getDate() + diffToMonday);
+  weekStart.setHours(0, 0, 0, 0);
+  
+  // Get end of week (Sunday)
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekStart.getDate() + 6);
+  weekEnd.setHours(23, 59, 59, 999);
+
+  const start = weekStart.getTime();
+  const end = weekEnd.getTime();
+  const weekBills = bills.filter((b) => b.createdAt >= start && b.createdAt <= end);
+  const totalRevenue = weekBills.reduce((s, b) => s + (b.total || 0), 0);
+  const totalOrders = weekBills.length;
+  const customers = new Set(weekBills.map((b) => b.customerName));
+  
+  // top items
+  const itemMap = {};
+  weekBills.forEach((b) => {
+    b.items.forEach((it) => {
+      const key = it.id || it.name;
+      if (!itemMap[key]) itemMap[key] = { name: it.name, quantity: 0, revenue: 0 };
+      itemMap[key].quantity += it.quantity || 1;
+      itemMap[key].revenue += (it.price || 0) * (it.quantity || 1);
+    });
+  });
+  const topItems = Object.values(itemMap).sort((a, b) => b.quantity - a.quantity).slice(0, 10);
+  
+  // Daily breakdown for the week
+  const daily = [];
+  for (let d = 0; d < 7; d++) {
+    const dayStart = start + d * 24 * 3600 * 1000;
+    const dayEnd = dayStart + 24 * 3600 * 1000 - 1;
+    const db = weekBills.filter((b) => b.createdAt >= dayStart && b.createdAt <= dayEnd);
+    const dayName = new Date(dayStart).toLocaleDateString('en-US', { weekday: 'short' });
+    daily.push({ day: dayName, orders: db.length, revenue: db.reduce((s, x) => s + (x.total || 0), 0) });
+  }
+  
+  res.json({ 
+    week: `${weekStart.toISOString().split('T')[0]} to ${weekEnd.toISOString().split('T')[0]}`, 
+    totalOrders, 
+    totalRevenue, 
+    averageOrderValue: totalOrders ? totalRevenue / totalOrders : 0, 
+    totalCustomers: customers.size, 
+    topItems, 
+    dailyBreakdown: daily 
+  });
+});
+
+// Monthly report computed from stored bills/orders
+app.get("/reports/monthly", (req, res) => {
+  const date = req.query.date || new Date().toISOString().split("T")[0];
+  const inputDate = new Date(date);
+  // Get start of month
+  const monthStart = new Date(inputDate.getFullYear(), inputDate.getMonth(), 1);
+  monthStart.setHours(0, 0, 0, 0);
+  
+  // Get end of month
+  const monthEnd = new Date(inputDate.getFullYear(), inputDate.getMonth() + 1, 0);
+  monthEnd.setHours(23, 59, 59, 999);
+
+  const start = monthStart.getTime();
+  const end = monthEnd.getTime();
+  const monthBills = bills.filter((b) => b.createdAt >= start && b.createdAt <= end);
+  const totalRevenue = monthBills.reduce((s, b) => s + (b.total || 0), 0);
+  const totalOrders = monthBills.length;
+  const customers = new Set(monthBills.map((b) => b.customerName));
+  
+  // top items
+  const itemMap = {};
+  monthBills.forEach((b) => {
+    b.items.forEach((it) => {
+      const key = it.id || it.name;
+      if (!itemMap[key]) itemMap[key] = { name: it.name, quantity: 0, revenue: 0 };
+      itemMap[key].quantity += it.quantity || 1;
+      itemMap[key].revenue += (it.price || 0) * (it.quantity || 1);
+    });
+  });
+  const topItems = Object.values(itemMap).sort((a, b) => b.quantity - a.quantity).slice(0, 10);
+  
+  // Weekly breakdown for the month
+  const weekly = [];
+  let currentWeekStart = new Date(monthStart);
+  while (currentWeekStart <= monthEnd) {
+    const weekEnd = new Date(currentWeekStart);
+    weekEnd.setDate(currentWeekStart.getDate() + 6);
+    if (weekEnd > monthEnd) weekEnd.setTime(monthEnd.getTime());
+    
+    const weekStartTime = currentWeekStart.getTime();
+    const weekEndTime = weekEnd.getTime();
+    const wb = monthBills.filter((b) => b.createdAt >= weekStartTime && b.createdAt <= weekEndTime);
+    
+    weekly.push({ 
+      week: `${currentWeekStart.toISOString().split('T')[0]} to ${weekEnd.toISOString().split('T')[0]}`, 
+      orders: wb.length, 
+      revenue: wb.reduce((s, x) => s + (x.total || 0), 0) 
+    });
+    
+    currentWeekStart.setDate(currentWeekStart.getDate() + 7);
+  }
+  
+  res.json({ 
+    month: `${monthStart.getFullYear()}-${String(monthStart.getMonth() + 1).padStart(2, '0')}`, 
+    totalOrders, 
+    totalRevenue, 
+    averageOrderValue: totalOrders ? totalRevenue / totalOrders : 0, 
+    totalCustomers: customers.size, 
+    topItems, 
+    weeklyBreakdown: weekly 
+  });
+});
+
 // Dev-only: seed menu collection from `menuData` (safe for local development)
 if (process.env.NODE_ENV !== 'production') {
   app.post('/admin/seed-menu', async (req, res) => {
@@ -360,6 +540,65 @@ if (process.env.NODE_ENV !== 'production') {
       return res.json({ success: true, inserted: docs.length, message: 'Seeded in-memory menu' });
     } catch (e) {
       console.error('Seed failed:', e);
+      return res.status(500).json({ success: false, error: String(e) });
+    }
+  });
+
+  // Dev-only: generate bills from existing orders for testing reports
+  app.post('/admin/generate-test-bills', async (req, res) => {
+    try {
+      const ordersToBill = orders.filter(o => o.status === 'COMPLETED' || o.status === 'PENDING');
+      const billsGenerated = [];
+
+      for (const order of ordersToBill) {
+        // Check if bill already exists
+        const existingBill = bills.find(b => b.orderId === order.id);
+        if (existingBill) continue;
+
+        const subtotal = order.items.reduce((s, it) => s + (it.price || 0) * (it.quantity || 1), 0);
+        const taxRate = 0.05;
+        const serviceRate = 0.02;
+        const tax = Math.round(subtotal * taxRate);
+        const service = Math.round(subtotal * serviceRate);
+        const total = subtotal + tax + service;
+
+        const bill = {
+          id: `BILL-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
+          orderId: order.id,
+          tableNumber: order.tableNumber,
+          customerName: order.customerName,
+          items: order.items,
+          subtotal,
+          tax,
+          service,
+          total,
+          createdAt: Date.now()
+        };
+
+        bills.push(bill);
+        billsGenerated.push(bill);
+
+        // Update order status to COMPLETED
+        order.status = 'COMPLETED';
+
+        // Persist to MongoDB if available
+        if (useMongo && mongoDb) {
+          try {
+            await mongoDb.collection("bills").updateOne({ _id: bill.id }, { $set: { ...bill, _id: bill.id } }, { upsert: true });
+            await mongoDb.collection("orders").updateOne({ _id: order.id }, { $set: { ...order, _id: order.id } }, { upsert: true });
+          } catch (e) {
+            console.warn("Failed to persist test bill to MongoDB:", e && e.message ? e.message : e);
+          }
+        }
+      }
+
+      return res.json({
+        success: true,
+        message: `Generated ${billsGenerated.length} test bills`,
+        bills: billsGenerated
+      });
+    } catch (e) {
+      console.error('Test bill generation failed:', e);
       return res.status(500).json({ success: false, error: String(e) });
     }
   });

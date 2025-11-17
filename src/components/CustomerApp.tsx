@@ -31,7 +31,7 @@ type CartItem = {
 };
 
 export const CustomerApp = () => {
-  const [currentView, setCurrentView] = useState<"welcome" | "otp" | "menu" | "cart" | "orderPlaced">("welcome");
+  const [currentView, setCurrentView] = useState<"welcome" | "otp" | "menu" | "cart" | "orderPlaced" | "pendingOrders">("welcome");
   const [tableNumber, setTableNumber] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [phone, setPhone] = useState("");
@@ -576,6 +576,12 @@ export const CustomerApp = () => {
             <p className="text-sm text-muted-foreground">{customerName}</p>
           </div>
           <div className="flex items-center gap-3">
+            {activeOrders.length > 0 && (
+              <Button variant="outline" size="sm" onClick={() => setCurrentView("pendingOrders")}>
+                <Coffee className="w-4 h-4 mr-2" />
+                Pending Orders ({activeOrders.length})
+              </Button>
+            )}
             <Button variant="ghost" size="sm" onClick={() => setShowUnavailable((s) => !s)}>
               {showUnavailable ? "Hide unavailable" : "Show unavailable"}
             </Button>
@@ -601,7 +607,7 @@ export const CustomerApp = () => {
 
         <div className="p-4 space-y-6 pb-24">
           {Object.entries(menu).map(([category, items]) => {
-            const visibleItems = (items || []).filter((it) => showUnavailable ? true : (it.available !== false));
+            const visibleItems = (items || []).filter((it) => showUnavailable || it.available !== false);
             if (visibleItems.length === 0) return null;
             return (
             <div key={category}>
@@ -771,6 +777,68 @@ export const CustomerApp = () => {
             </Button>
           </div>
         </Card>
+      </div>
+    );
+  }
+
+  // Pending Orders Screen
+  if (currentView === "pendingOrders") {
+    return (
+      <div className="min-h-screen bg-background">
+        <header className="sticky top-0 bg-card border-b p-4 flex items-center justify-between shadow-sm z-10">
+          <div>
+            <h2 className="font-bold text-lg">Pending Orders</h2>
+            <p className="text-sm text-muted-foreground">Track your active orders</p>
+          </div>
+          <Button variant="ghost" onClick={() => setCurrentView("menu")}>
+            Back to Menu
+          </Button>
+        </header>
+
+        <div className="p-4 space-y-4">
+          {activeOrders.length === 0 ? (
+            <Card className="p-8 text-center">
+              <Coffee className="w-16 h-16 mx-auto text-muted-foreground mb-4" />
+              <h3 className="text-lg font-medium mb-2">No Pending Orders</h3>
+              <p className="text-muted-foreground mb-4">You don't have any active orders at the moment.</p>
+              <Button onClick={() => setCurrentView("menu")}>
+                Browse Menu
+              </Button>
+            </Card>
+          ) : (
+            activeOrders.map((orderId) => {
+              const status = activeOrderStatuses[orderId];
+              return (
+                <Card key={orderId} className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="font-medium">Order #{orderId}</h3>
+                      <p className="text-sm text-muted-foreground">
+                        Status: {status?.status ? status.status.replace("_", " ") : "Processing..."}
+                      </p>
+                      {status?.items && (
+                        <p className="text-sm text-muted-foreground">
+                          {status.items.length} item{status.items.length !== 1 ? "s" : ""}
+                        </p>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      {status?.total && (
+                        <p className="font-bold">₹{status.total}</p>
+                      )}
+                      <Badge 
+                        variant={status?.status === "COMPLETED" ? "default" : "secondary"}
+                        className="mt-1"
+                      >
+                        {status?.status || "PENDING"}
+                      </Badge>
+                    </div>
+                  </div>
+                </Card>
+              );
+            })
+          )}
+        </div>
       </div>
     );
   }
